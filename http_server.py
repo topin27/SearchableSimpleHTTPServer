@@ -2,12 +2,23 @@
 
 import os, sys
 import json
+import subprocess
 from functools import partial
-from http.server import SimpleHTTPRequestHandler
-from http.server import BaseHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from http import HTTPStatus
 from urllib.parse import urlparse, parse_qs
 from html.parser import HTMLParser
+
+
+class CommandException(Exception):
+
+    """Failed to execute the command
+    """
+
+    def __init__(self, error_code, error_str):
+        self.code = error_code
+        self.err_str = error_str
 
 
 class MatchedHTMLParser(HTMLParser):
@@ -37,6 +48,9 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
     """HTTP searver which can search on local system.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     # We only need to custom the GET request.
     def do_GET(self):
         """Serve a GET request.
@@ -47,17 +61,30 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
 
         params = parse_qs(query)
         search_dir = params['dir']
-        search_words = params['words']
+        search_words = params['word']
 
-        candidates = self.search_candidates(search_dir, search_words)
+        try:
+            candidates = self.search_candidates(
+                    search_dir[0] if search_dir else '.',
+                    search_words)
+        except CommandException as e:
+            print('** Search failed, return {}, message:\n{}'.format(
+                    e.code, e.err_str))
+            self.send_error(HTTPStatus.NOT_FOUND, 'File not found')
+            return None
+        except Exception as e:
+            print('** Search failed, message:\n{}'.format(e))
+            self.send_error(HTTPStatus.NOT_FOUND, str(e))
+            return None
+
         res = []
         for file in candidates:
             # parse the html to get title and the short description
             html_parser = MatchedHTMLParser(search_words)
             with open(file) as f:
                 content = f.read()
-                html_parser.feed(content)
-                res.append(html_parser.get_meta())
+            html_parser.feed(content)
+            res.append(html_parser.get_meta())
         json_str = self.assemble_json(res)
         self.wfile.write(json_str.encode())
 
@@ -73,10 +100,19 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
     def search_candidates(self, d, words):
         """Search @words in @d, and return the short desc for match file.
         """
-        command = 'grep -ilnrw {} {}'.format(words, d)
-        output = os.popen(command)
-        # TODO: failed condition is needed
-        filelist = output.read().split('\n')
+        search_dir = os.path.abspath(os.path.join(self.directory, d))
+        if os.path.commonpath([self.directory]) != \
+           os.path.commonpath([self.directory, search_dir]):
+            # For safty, we need to check the search directory is not
+            # "overflow"
+            raise Exception('Invalid Directory: {}'.format(d))
+
+        try:
+            output = subprocess.check_output(
+                    ['grep', '-ilnrw'] + words + [search_dir])
+        except subprocess.CalledProcessError as e:
+            raise CommandException(e.output, e.returncode)
+        filelist = output.decode('utf-8').strip().split('\n')
         return filelist
 
 
