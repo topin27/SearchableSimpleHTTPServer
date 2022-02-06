@@ -97,10 +97,10 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
     def assemble_json(self, res):
         """Remove empty item and convert to json format
         """
-        ret = {}
+        ret = []
         for title, desc in res:
             if title and desc:
-                ret[title] = desc
+                ret.append({'title': title, 'desc': desc})
         return json.dumps(ret)
 
     def search_candidates(self, d, words):
