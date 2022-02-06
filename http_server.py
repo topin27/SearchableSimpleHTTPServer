@@ -4,9 +4,9 @@ import os, sys
 import json
 import subprocess
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, BaseHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
-from http import HTTPStatus
 from urllib.parse import urlparse, parse_qs
 from html.parser import HTMLParser
 
@@ -33,11 +33,18 @@ class MatchedHTMLParser(HTMLParser):
     def handle_starttag(self, tag, _):
         self.lasttag = tag
 
+    def handle_endtag(self, _):
+        self.lasttag = ''
+
     def handle_data(self, data):
+        if not self.lasttag:
+            return
         if self.lasttag == 'title':
-            self.title = data
+            self.title = data.strip('\n')
         elif self.lasttag == 'body':
-            self.desc = data
+            self.desc = data.strip('\n')
+        else:
+            pass
 
     def get_meta(self):
         return (self.title, self.desc)
@@ -68,13 +75,12 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
                     search_dir[0] if search_dir else '.',
                     search_words)
         except CommandException as e:
+            if e.code == 1:
+                print('@@@@ CommandException')
+                self.wfile.write('{}'.encode())
+                return None
             print('** Search failed, return {}, message:\n{}'.format(
                     e.code, e.err_str))
-            self.send_error(HTTPStatus.NOT_FOUND, 'File not found')
-            return None
-        except Exception as e:
-            print('** Search failed, message:\n{}'.format(e))
-            self.send_error(HTTPStatus.NOT_FOUND, str(e))
             return None
 
         res = []
@@ -94,7 +100,7 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
         ret = {}
         for title, desc in res:
             if title and desc:
-                res[title] = desc
+                ret[title] = desc
         return json.dumps(ret)
 
     def search_candidates(self, d, words):
@@ -103,15 +109,14 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
         search_dir = os.path.abspath(os.path.join(self.directory, d))
         if os.path.commonpath([self.directory]) != \
            os.path.commonpath([self.directory, search_dir]):
-            # For safty, we need to check the search directory is not
-            # "overflow"
+            # For safty, we need to check the search directory is not "overflow"
             raise Exception('Invalid Directory: {}'.format(d))
 
         try:
-            output = subprocess.check_output(
-                    ['grep', '-ilnrw'] + words + [search_dir])
+            cmd = ['grep', '-ilnRw', '--include=*.html'] + words + [search_dir]
+            output = subprocess.check_output(cmd)
         except subprocess.CalledProcessError as e:
-            raise CommandException(e.output, e.returncode)
+            raise CommandException(e.returncode, e.output)
         filelist = output.decode('utf-8').strip().split('\n')
         return filelist
 
@@ -129,7 +134,7 @@ def test(HandlerClass=BaseHTTPRequestHandler,
     with ServerClass(server_address, HandlerClass) as httpd:
         sa = httpd.socket.getsockname()
         serve_message = ("Serving HTTP on {host} port {port} "
-                        "(http://{host}:{port}/) ...")
+                         "(http://{host}:{port}/) ...")
         print(serve_message.format(host=sa[0], port=sa[1]))
         try:
             httpd.serve_forever()
