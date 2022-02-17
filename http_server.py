@@ -42,7 +42,7 @@ class MatchedHTMLParser(HTMLParser):
         if self.lasttag == 'title':
             self.title = data.strip('\n')
         elif self.lasttag == 'body':
-            self.desc = data.strip('\n')
+            self.desc = data.replace('\n', ' ').strip()
         else:
             pass
 
@@ -58,15 +58,22 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def send_cors_headers(self):
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', '*')
+        self.send_header('Access-Control-Allow-Headers',
+                         'Authorization, Content-Type')
+
     # We only need to custom the GET request.
     def do_GET(self):
         """Serve a GET request.
         """
-        query = urlparse(self.path).query
-        if not query:
+        parse_res = urlparse(self.path)
+        if parse_res.path != '/search' or not parse_res.query:
             return super().do_GET()
 
-        params = parse_qs(query)
+        params = parse_qs(parse_res.query)
         search_dir = params['dir']
         search_words = params['word']
 
@@ -76,11 +83,10 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
                     search_words)
         except CommandException as e:
             if e.code == 1:
-                print('@@@@ CommandException')
                 self.wfile.write('{}'.encode())
                 return None
             print('** Search failed, return {}, message:\n{}'.format(
-                    e.code, e.err_str))
+                  e.code, e.err_str))
             return None
 
         res = []
@@ -92,6 +98,9 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
             html_parser.feed(content)
             res.append(html_parser.get_meta())
         json_str = self.assemble_json(res)
+        self.send_response(200)
+        self.send_cors_headers()
+        self.end_headers()
         self.wfile.write(json_str.encode())
 
     def assemble_json(self, res):
