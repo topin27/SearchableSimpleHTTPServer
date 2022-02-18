@@ -42,12 +42,14 @@ class MatchedHTMLParser(HTMLParser):
         if self.lasttag == 'title':
             self.title = data.strip('\n')
         elif self.lasttag == 'body':
+            print('data:', data)
             self.desc = data.replace('\n', ' ').strip()
+            print(self.desc)
         else:
             pass
 
     def get_meta(self):
-        return (self.title, self.desc)
+        return [self.title, self.desc]
 
 
 class SearchableHttpServer(SimpleHTTPRequestHandler):
@@ -96,7 +98,9 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
             with open(file) as f:
                 content = f.read()
             html_parser.feed(content)
-            res.append(html_parser.get_meta())
+            meta = html_parser.get_meta()
+            meta.append(os.path.relpath(file, self.directory))
+            res.append(meta)
         json_str = self.assemble_json(res)
         self.send_response(200)
         self.send_cors_headers()
@@ -107,9 +111,9 @@ class SearchableHttpServer(SimpleHTTPRequestHandler):
         """Remove empty item and convert to json format
         """
         ret = []
-        for title, desc in res:
+        for title, desc, file in res:
             if title and desc:
-                ret.append({'title': title, 'desc': desc})
+                ret.append({'title': title, 'desc': desc, 'file': file})
         return json.dumps(ret)
 
     def search_candidates(self, d, words):
